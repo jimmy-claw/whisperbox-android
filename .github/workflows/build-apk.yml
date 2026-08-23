@@ -39,28 +39,16 @@ jobs:
       - name: Prebuild native project
         run: npx expo prebuild --platform android --no-install
 
-      - name: Generate debug keystore
-        working-directory: android
-        run: |
-          keytool -genkey -v -keystore debug.keystore \
-            -alias androiddebugkey -keyalg RSA -keysize 2048 \
-            -validity 10000 -storepass android -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US"
-
-      - name: Build release APK (standalone, JS bundled)
+      - name: Build debug APK (standalone, JS bundled)
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon \
-            -Pandroid.injected.signing.store.file=debug.keystore \
-            -Pandroid.injected.signing.store.password=android \
-            -Pandroid.injected.signing.key.alias=androiddebugkey \
-            -Pandroid.injected.signing.key.password=android
+          ./gradlew assembleDebug --no-daemon
 
       - name: Find APK
         id: find_apk
         run: |
-          APK=$(find android/app/build/outputs/apk/release/ -name "*.apk" | head -1)
+          APK=$(find android/app/build/outputs/apk/debug/ -name "*.apk" | head -1)
           if [ -z "$APK" ]; then
             echo "No APK found!"
             find android/app/build/outputs/ -name "*.apk" 2>/dev/null
