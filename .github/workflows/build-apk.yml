@@ -74,9 +74,11 @@ jobs:
         with:
           name: whisperbox-android
           path: ${{ steps.find_apk.outputs.apk_path }}
-          retention-days: 7
+          retention-days: 30
 
       - name: Upload to GitHub Release
+        if: always()
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -84,8 +86,8 @@ jobs:
           TAG="apk-$(date +%Y%m%d-%H%M)"
           cp "$APK_PATH" whisperbox-android.apk
           gh release create "$TAG" \
-            --title "WhisperBox Android (standalone)" \
-            --notes "Standalone APK — JS bundled, no dev server needed." \
+            --title "WhisperBox Android" \
+            --notes "Auto-built from ${GITHUB_SHA}" \
             --prerelease \
-            whisperbox-android.apk
-          echo "Download: $(gh release view "$TAG" --json url --jq .url)/whisperbox-android.apk"
+            whisperbox-android.apk || echo "Release upload failed (permission) — use artifact instead"
+          echo "Artifact: Actions → run → whisperbox-android artifact"
