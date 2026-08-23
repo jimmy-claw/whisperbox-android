@@ -39,28 +39,53 @@ jobs:
       - name: Prebuild native project
         run: npx expo prebuild --platform android --no-install
 
-      - name: Build debug APK
+      - name: Generate debug keystore
+        working-directory: android
+        run: |
+          keytool -genkey -v -keystore debug.keystore \
+            -alias androiddebugkey -keyalg RSA -keysize 2048 \
+            -validity 10000 -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US"
+
+      - name: Build release APK (standalone, JS bundled)
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file=debug.keystore \
+            -Pandroid.injected.signing.store.password=android \
+            -Pandroid.injected.signing.key.alias=androiddebugkey \
+            -Pandroid.injected.signing.key.password=android
 
-      - name: Upload APK
+      - name: Find APK
+        id: find_apk
+        run: |
+          APK=$(find android/app/build/outputs/apk/release/ -name "*.apk" | head -1)
+          if [ -z "$APK" ]; then
+            echo "No APK found!"
+            find android/app/build/outputs/ -name "*.apk" 2>/dev/null
+            exit 1
+          fi
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+          ls -la "$APK"
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: whisperbox-android
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.find_apk.outputs.apk_path }}
           retention-days: 7
 
-      - name: Upload APK to release
-        if: github.event_name == 'workflow_dispatch'
+      - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          APK_PATH="android/app/build/outputs/apk/debug/app-debug.apk"
-          VERSION=$(node -p "require('./package.json').version")
-          gh release create "apk-${VERSION}-$(date +%Y%m%d)" \
-            --title "WhisperBox Android APK" \
-            --body "Debug APK for testing. Install directly on device." \
-            --draft \
-            "$APK_PATH"
+          APK_PATH="${{ steps.find_apk.outputs.apk_path }}"
+          TAG="apk-$(date +%Y%m%d-%H%M)"
+          cp "$APK_PATH" whisperbox-android.apk
+          gh release create "$TAG" \
+            --title "WhisperBox Android (standalone)" \
+            --body "Standalone APK — JS bundled, no dev server needed.\n\nInstall: tap APK → allow unknown apps → open." \
+            --prerelease \
+            whisperbox-android.apk
+          echo "Download: $(gh release view "$TAG" --json url --jq .url)/whisperbox-android.apk"
