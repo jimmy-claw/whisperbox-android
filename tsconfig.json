@@ -9,9 +9,20 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
-    "lib": ["es2020"],
+    "lib": [
+      "es2020"
+    ],
     "types": []
   },
-  "include": ["App.tsx", "src/**/*.ts", "index.js"],
-  "exclude": ["node_modules", "test", "src/transport.ts"]
+  "include": [
+    "App.tsx",
+    "src/**/*.ts",
+    "index.js"
+  ],
+  "exclude": [
+    "node_modules",
+    "test",
+    "src/transport.ts"
+  ],
+  "extends": "expo/tsconfig.base"
 }
