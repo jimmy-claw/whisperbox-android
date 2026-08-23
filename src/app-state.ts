@@ -1,20 +1,39 @@
 // whisperbox-android — app state manager.
-// Wires together: identity + transport + sync + engine.
-// Uses mock transport by default (Expo Go compatible).
-// Swap to real loam-transport for production native builds.
+// Local-first: identity + log load immediately, node connects in background.
+// Uses loam-transport (real Waku mesh) with Edge mode for embedded node.
 
 import { getIdentity } from "./identity";
-import * as transport from "./mock-transport";
-import { appendEvent, getLog, initSync, startReconcile, stopReconcile } from "./sync";
+import * as loam from "loam-transport";
+import { toByteArray } from "base64-js";
+import { appendEvent, getLog, initSync, startReconcile, stopReconcile, setSendSyncReq } from "./sync";
 import {
   WbEvent, HlcClock, computeState, computeCreatorView,
-  AppState, CreatorView, FormDef, Question,
+  AppState, CreatorView, FormDef, Question, TOPIC,
 } from "./engine";
 import { seal, open, Identity, pubKeyFromHex } from "./crypto";
 import { bytesToBase64, base64ToBytes } from "./encoding";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const STORAGE_KEY = "whisperbox-log";
+const NODE_MODE_KEY = "whisperbox-node-mode";
+
+// ── Node mode ─────────────────────────────────────────────────────────────────
+
+export type NodeMode = "shared" | "embedded";
+
+let nodeMode: NodeMode = "embedded";
+
+export async function getSavedNodeMode(): Promise<NodeMode | null> {
+  try {
+    const v = await AsyncStorage.getItem(NODE_MODE_KEY);
+    return v === "shared" || v === "embedded" ? v : null;
+  } catch { return null; }
+}
+
+export async function saveNodeMode(mode: NodeMode): Promise<void> {
+  nodeMode = mode;
+  await AsyncStorage.setItem(NODE_MODE_KEY, mode);
+}
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
@@ -23,10 +42,18 @@ let clock: HlcClock | null = null;
 let state: AppState | null = null;
 let creatorView: CreatorView | null = null;
 let status = "initializing";
+let nodeStatus = "disconnected";
 let listeners: (() => void)[] = [];
 
-export function getState(): { state: AppState | null; creatorView: CreatorView | null; status: string; identity: Identity | null } {
-  return { state, creatorView, status, identity };
+export function getState(): {
+  state: AppState | null;
+  creatorView: CreatorView | null;
+  status: string;
+  nodeStatus: string;
+  identity: Identity | null;
+  nodeMode: NodeMode;
+} {
+  return { state, creatorView, status, nodeStatus, identity, nodeMode };
 }
 
 export function subscribe(fn: () => void): () => void {
@@ -44,8 +71,8 @@ function refold(): void {
   if (!identity) return;
   const log = getLog();
   state = computeState(log, identity.address);
+  state.nodeReady = nodeStatus === "connected";
 
-  // Creator view: try to decrypt responses with our key
   const openFn = (sealed: Uint8Array): Uint8Array | null => {
     try {
       return open(sealed, identity!.privKey);
@@ -65,6 +92,134 @@ function onWbEvent(e: WbEvent): void {
   appendEvent(e);
   refold();
   persistLog();
+}
+
+// ── Envelope helpers ──────────────────────────────────────────────────────────
+
+function envEvent(event: WbEvent): string {
+  return JSON.stringify({ v: 1, type: "EVENT", event });
+}
+
+function envSyncReq(from: string): string {
+  return JSON.stringify({ v: 1, type: "SYNC_REQ", from });
+}
+
+function parseEnvelope(text: string): { type: string; event?: WbEvent; from?: string } | null {
+  try {
+    const o = JSON.parse(text);
+    if (!o || typeof o.type !== "string") return null;
+    if (o.type === "EVENT" && o.event && typeof o.event === "object") {
+      return { type: "EVENT", event: o.event };
+    }
+    if (o.type === "SYNC_REQ") {
+      return { type: "SYNC_REQ", from: typeof o.from === "string" ? o.from : "" };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function peelBase64(raw: string): string {
+  let s = raw.trim();
+  for (let i = 0; i < 2; i++) {
+    if (s.startsWith("{") || s.startsWith("[")) break;
+    try {
+      s = new TextDecoder().decode(toByteArray(s));
+    } catch {
+      break;
+    }
+  }
+  return s;
+}
+
+// ── Sync handlers ─────────────────────────────────────────────────────────────
+
+async function handleSyncReq(_from: string): Promise<void> {
+  const log = getLog();
+  if (log.length === 0) return;
+  const BATCH = 20;
+  for (let i = 0; i < log.length; i += BATCH) {
+    const batch = log.slice(i, i + BATCH);
+    for (const e of batch) {
+      await publishEvent(e);
+    }
+  }
+}
+
+async function sendSyncReq(): Promise<void> {
+  if (!identity) return;
+  const text = envSyncReq(identity.address.slice(2, 10));
+  const bytes = new TextEncoder().encode(text);
+  await loam.publishSealed(TOPIC, bytes);
+}
+
+// ── Transport wiring ──────────────────────────────────────────────────────────
+
+let transportStarted = false;
+
+function wireTransport(): void {
+  loam.start({
+    deviceId: identity!.address.slice(2, 10),
+    topics: [TOPIC],
+    onReceive: (topic: string, candidates: Uint8Array[]): boolean => {
+      for (const cand of candidates) {
+        try {
+          const text = peelBase64(new TextDecoder().decode(cand));
+          const env = parseEnvelope(text);
+          if (env && env.type === "EVENT" && env.event) {
+            onWbEvent(env.event);
+            return true;
+          }
+          if (env && env.type === "SYNC_REQ") {
+            handleSyncReq(env.from || "");
+            return true;
+          }
+        } catch { /* try next */ }
+      }
+      return false;
+    },
+    onStatus: (s: string) => {
+      if (s === "Connected" || s === "Connected (shared node)") {
+        nodeStatus = "connected";
+      } else if (s.includes("unavailable") || s.includes("error")) {
+        nodeStatus = "error";
+      } else {
+        nodeStatus = "connecting";
+      }
+      status = nodeStatus === "connected" ? "ready" : "connecting";
+      refold();
+      notify();
+    },
+  }).then(() => {
+    transportStarted = true;
+
+    // Cold-start: pull history
+    loam.storeSync((topic: string, candidates: Uint8Array[]): boolean => {
+      for (const cand of candidates) {
+        try {
+          const text = peelBase64(new TextDecoder().decode(cand));
+          const env = parseEnvelope(text);
+          if (env && env.type === "EVENT" && env.event) {
+            onWbEvent(env.event);
+            return true;
+          }
+        } catch { /* */ }
+      }
+      return false;
+    }).catch(() => { /* offline */ });
+
+    // Send SYNC_REQ
+    sendSyncReq().catch(() => { /* offline */ });
+
+    // Wire reconcile
+    setSendSyncReq(sendSyncReq);
+    startReconcile();
+  }).catch((e: any) => {
+    nodeStatus = "error: " + (e?.message || String(e)).slice(0, 60);
+    status = "ready (offline)";
+    notify();
+  });
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
@@ -90,39 +245,49 @@ export async function init(): Promise<void> {
     }
   } catch { /* first run */ }
 
-  status = "starting node";
-  notify();
+  // Load saved node mode
+  const saved = await getSavedNodeMode();
+  if (saved) nodeMode = saved;
 
-  // Register event handler BEFORE starting node
-  transport.onEvent(onWbEvent);
-  transport.onStatus((s: string) => { status = s; notify(); });
-
-  initSync();
-  await transport.startNode(identity, deviceId);
-
-  // Cold-start: pull history from fleet store
-  status = "syncing";
-  notify();
-  try {
-    await transport.storeSync();
-  } catch { /* offline */ }
-
-  // Send SYNC_REQ to trigger peers to serve us
-  try {
-    await transport.sendSyncReq();
-  } catch { /* offline */ }
-
-  // Start periodic reconcile
-  startReconcile();
-
+  // LOCAL-FIRST: app is ready immediately with local data
   status = "ready";
   refold();
   notify();
+
+  // Start node in background (non-blocking)
+  startNode();
+}
+
+async function startNode(): Promise<void> {
+  if (!identity || transportStarted) return;
+
+  nodeStatus = "connecting";
+  status = "connecting";
+  notify();
+
+  // Configure loam-transport based on node mode
+  if (nodeMode === "shared") {
+    loam.preferServiceBackend(true, "whisperbox");
+  } else {
+    loam.preferServiceBackend(false);
+    loam.setNodeMode("Edge"); // Edge mode: light, mobile-friendly
+  }
+
+  wireTransport();
+}
+
+export async function switchNodeMode(mode: NodeMode): Promise<void> {
+  await saveNodeMode(mode);
+  await loam.stop().catch(() => {});
+  transportStarted = false;
+  nodeStatus = "disconnected";
+  startNode();
 }
 
 export async function shutdown(): Promise<void> {
   stopReconcile();
-  await transport.stopNode();
+  await loam.stop().catch(() => {});
+  transportStarted = false;
   status = "stopped";
   notify();
 }
@@ -155,7 +320,7 @@ export async function createForm(title: string, description: string, questions: 
   appendEvent(event);
   refold();
   persistLog();
-  await transport.publishEvent(event);
+  publishEvent(event).catch(() => { /* will retry on reconcile */ });
   return formId;
 }
 
@@ -165,7 +330,6 @@ export async function submitResponse(formId: string, answers: { question: string
   const form = state.forms[formId];
   if (!form) throw new Error("form not found");
 
-  // ECIES-seal the response to the form creator's public key
   const creatorPub = pubKeyFromHex(form.publicKey);
   const plaintext = JSON.stringify({
     formId,
@@ -190,7 +354,7 @@ export async function submitResponse(formId: string, answers: { question: string
   appendEvent(event);
   refold();
   persistLog();
-  await transport.publishEvent(event);
+  publishEvent(event).catch(() => { /* retry later */ });
 }
 
 export async function closeForm(formId: string): Promise<void> {
@@ -206,7 +370,15 @@ export async function closeForm(formId: string): Promise<void> {
   appendEvent(event);
   refold();
   persistLog();
-  await transport.publishEvent(event);
+  publishEvent(event).catch(() => {});
+}
+
+// ── Publish (background, non-blocking) ────────────────────────────────────────
+
+async function publishEvent(event: WbEvent): Promise<void> {
+  const text = envEvent(event);
+  const bytes = new TextEncoder().encode(text);
+  await loam.publishSealed(TOPIC, bytes);
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────

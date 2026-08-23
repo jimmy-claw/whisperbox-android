@@ -8,3 +8,4 @@ dist/
 *.mobileprovision
 *.orig.*
 web-build/
+app-debug.apk

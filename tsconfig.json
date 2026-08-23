@@ -22,7 +22,8 @@
   "exclude": [
     "node_modules",
     "test",
-    "src/transport.ts"
+    "src/transport.ts",
+    "../loam-transport"
   ],
   "extends": "expo/tsconfig.base"
 }

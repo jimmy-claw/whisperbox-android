@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useCallback } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, StatusBar, SafeAreaView,
+  TextInput, StatusBar, SafeAreaView, Alert,
 } from "react-native";
 import {
   init, shutdown, getState, subscribe,
   createForm, submitResponse, closeForm,
+  getSavedNodeMode, saveNodeMode, switchNodeMode,
+  NodeMode,
 } from "./src/app-state";
 import { AppState, CreatorView, FormDef, Question } from "./src/engine";
 
@@ -36,27 +38,50 @@ export default function App() {
   const [selectedId, setSelectedId] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showShare, setShowShare] = useState(false);
+  const [showSidebar, setShowSidebar] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [nodeModeChosen, setNodeModeChosen] = useState(false);
 
   useEffect(() => {
-    init().catch((e) => console.error("init failed:", e));
+    // Check if node mode was already chosen
+    getSavedNodeMode().then((mode) => {
+      if (mode) {
+        setNodeModeChosen(true);
+        doInit();
+      }
+    });
     const unsub = subscribe(() => setTick((n) => n + 1));
     return () => { unsub(); shutdown(); };
   }, []);
 
-  const { state, creatorView, status, identity } = getState();
+  const doInit = () => {
+    init().catch((e) => console.error("init failed:", e));
+  };
+
+  const handleNodeSelect = async (mode: NodeMode) => {
+    await saveNodeMode(mode);
+    setNodeModeChosen(true);
+    doInit();
+  };
+
+  const { state, creatorView, status, nodeStatus, identity, nodeMode } = getState();
 
   const selectedForm = state?.forms[selectedId] || null;
   const isCreator = !!(creatorView && selectedForm && creatorView.forms.includes(selectedForm.id));
   const responses = creatorView?.responses[selectedId] || [];
 
-  const handleCreate = async (title: string, questions: Question[]) => {
+  const handleCreate = async (title: string) => {
     try {
+      // Simple form: single text question
+      const questions: Question[] = [
+        { id: "q1", type: "text", text: "Your response", required: true },
+      ];
       const fid = await createForm(title, "", questions);
       setSelectedId(fid);
       setShowCreate(false);
+      setShowSidebar(false);
     } catch (e: any) {
-      alert("Create failed: " + e.message);
+      Alert.alert("Error", "Create failed: " + e.message);
     }
   };
 
@@ -65,13 +90,13 @@ export default function App() {
     const ans = selectedForm.questions
       .filter((q) => answers[q.id])
       .map((q) => ({ question: q.text, answer: answers[q.id] }));
-    if (ans.length === 0) { alert("Answer at least one question"); return; }
+    if (ans.length === 0) { Alert.alert("Hint", "Answer at least one question"); return; }
     try {
       await submitResponse(selectedForm.id, ans);
       setAnswers({});
-      alert("Response submitted ✓");
+      Alert.alert("Done", "Response submitted ✓");
     } catch (e: any) {
-      alert("Submit failed: " + e.message);
+      Alert.alert("Error", "Submit failed: " + e.message);
     }
   };
 
@@ -79,204 +104,259 @@ export default function App() {
     ? `whisperbox://form?id=${selectedForm.id}`
     : "";
 
+  // ── Node Selection Screen ──
+  if (!nodeModeChosen) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <StatusBar barStyle="light-content" backgroundColor={C.bg} />
+        <View style={styles.nodeSelect}>
+          <Text style={styles.nodeSelectIcon}>🔒</Text>
+          <Text style={styles.nodeSelectTitle}>WhisperBox</Text>
+          <Text style={styles.nodeSelectSub}>Choose how to connect</Text>
+
+          <TouchableOpacity style={styles.nodeOption} onPress={() => handleNodeSelect("shared")}>
+            <View style={styles.nodeOptionIcon}>
+              <Text>🌐</Text>
+            </View>
+            <View style={styles.nodeOptionBody}>
+              <Text style={styles.nodeOptionTitle}>Shared Node</Text>
+              <Text style={styles.nodeOptionDesc}>
+                Use the Logos Delivery app on this device. Lower battery, always-on sync.
+              </Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.nodeOption} onPress={() => handleNodeSelect("embedded")}>
+            <View style={styles.nodeOptionIcon}>
+              <Text>📱</Text>
+            </View>
+            <View style={styles.nodeOptionBody}>
+              <Text style={styles.nodeOptionTitle}>Embedded Node</Text>
+              <Text style={styles.nodeOptionDesc}>
+                Run your own node in Edge mode. No other apps needed, uses more battery.
+              </Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar barStyle="light-content" backgroundColor={C.bg} />
-      <View style={styles.row}>
-        {/* ── Sidebar ── */}
-        <View style={styles.sidebar}>
-          <View style={styles.brand}>
-            <Text style={styles.brandIcon}>🔒</Text>
-            <View>
-              <Text style={styles.brandName}>WhisperBox</Text>
-              <Text style={styles.brandSub}>encrypted forms</Text>
-            </View>
-          </View>
 
-          <TouchableOpacity style={styles.newBtn} onPress={() => setShowCreate(true)}>
-            <Text style={styles.newBtnText}>+ New Form</Text>
-          </TouchableOpacity>
-
-          <Text style={styles.sectionLabel}>FORMS</Text>
-
-          <ScrollView style={styles.formList}>
-            {(state?.feed || []).map((fid) => {
-              const f = state!.forms[fid];
-              const active = fid === selectedId;
-              const mine = creatorView?.forms.includes(fid);
-              const respCount = creatorView?.responses[fid]?.length || 0;
-              return (
-                <TouchableOpacity
-                  key={fid}
-                  style={[styles.formItem, active && styles.formItemActive]}
-                  onPress={() => { setSelectedId(fid); setAnswers({}); }}
-                >
-                  <View style={styles.formIcon}>
-                    <Text>📋</Text>
-                  </View>
-                  <View style={styles.formBody}>
-                    <Text style={styles.formTitle} numberOfLines={1}>
-                      {f?.title || fid}
-                    </Text>
-                    <Text style={styles.formMeta}>
-                      {(f?.questions?.length || 0) + "q"}
-                      {respCount > 0 && ` · ${respCount} resp`}
-                    </Text>
-                  </View>
-                  {mine && (
-                    <View style={styles.mineBadge}>
-                      <Text style={styles.mineBadgeText}>Mine</Text>
-                    </View>
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-
-          <View style={styles.footer}>
-            <View style={[styles.dot, { backgroundColor: state?.nodeReady ? C.success : C.warning }]} />
-            <Text style={styles.footerText}>
-              {status} · {identity ? identity.address.slice(0, 8) + "…" : "—"}
+      {/* ── Top Bar ── */}
+      <View style={styles.topBar}>
+        <TouchableOpacity style={styles.hamburger} onPress={() => setShowSidebar(!showSidebar)}>
+          <Text style={styles.hamburgerIcon}>{showSidebar ? "✕" : "☰"}</Text>
+        </TouchableOpacity>
+        <View style={styles.topBarTitle}>
+          <Text style={styles.topBarAppName}>WhisperBox</Text>
+          <View style={styles.statusPill}>
+            <View style={[styles.dot, { backgroundColor: nodeStatus === "connected" ? C.success : nodeStatus === "connecting" ? C.warning : C.error }]} />
+            <Text style={styles.statusPillText}>
+              {nodeStatus === "connected" ? "online" : nodeStatus === "connecting" ? "connecting…" : "offline"}
             </Text>
           </View>
         </View>
+        <TouchableOpacity style={styles.newBtnSmall} onPress={() => setShowCreate(true)}>
+          <Text style={styles.newBtnSmallText}>+</Text>
+        </TouchableOpacity>
+      </View>
 
-        {/* ── Main Pane ── */}
-        <View style={styles.main}>
-          {!selectedForm ? (
-            <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>Select a form</Text>
-              <Text style={styles.emptySub}>Choose a form from the sidebar, or create a new one.</Text>
+      {/* ── Sidebar (overlay) ── */}
+      {showSidebar && (
+        <View style={styles.sidebarOverlay}>
+          <TouchableOpacity
+            style={styles.sidebarBackdrop}
+            activeOpacity={1}
+            onPress={() => setShowSidebar(false)}
+          />
+          <View style={styles.sidebar}>
+            <View style={styles.sidebarHeader}>
+              <Text style={styles.sidebarTitle}>Forms</Text>
+              <TouchableOpacity onPress={() => setShowSidebar(false)}>
+                <Text style={styles.sidebarClose}>✕</Text>
+              </TouchableOpacity>
             </View>
-          ) : (
-            <ScrollView contentContainerStyle={styles.detail}>
-              {/* Header */}
-              <View style={styles.detailHeader}>
-                <Text style={styles.detailTitle}>{selectedForm.title}</Text>
-                {isCreator && (
+
+            <ScrollView style={styles.formList}>
+              {(state?.feed || []).map((fid) => {
+                const f = state!.forms[fid];
+                const active = fid === selectedId;
+                const mine = creatorView?.forms.includes(fid);
+                const respCount = creatorView?.responses[fid]?.length || 0;
+                return (
                   <TouchableOpacity
-                    style={styles.shareBtn}
-                    onPress={() => setShowShare(true)}
+                    key={fid}
+                    style={[styles.formItem, active && styles.formItemActive]}
+                    onPress={() => { setSelectedId(fid); setAnswers({}); setShowSidebar(false); }}
                   >
-                    <Text style={styles.shareBtnText}>Share</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-
-              {selectedForm.description ? (
-                <Text style={styles.detailDesc}>{selectedForm.description}</Text>
-              ) : null}
-
-              <View style={styles.metaRow}>
-                {!(state?.closedForms?.has(selectedForm.id)) && (
-                  <View style={styles.openBadge}>
-                    <Text style={styles.openBadgeText}>Open</Text>
-                  </View>
-                )}
-                <Text style={styles.metaText}>
-                  by {selectedForm.creator.slice(0, 6)}…{selectedForm.creator.slice(-4)}
-                </Text>
-              </View>
-
-              {/* ── Creator View ── */}
-              {isCreator && (
-                <View>
-                  {/* Stats */}
-                  <View style={styles.statsRow}>
-                    <View style={styles.statCard}>
-                      <Text style={[styles.statNum, { color: C.primary }]}>{responses.length}</Text>
-                      <Text style={styles.statLabel}>Responses</Text>
+                    <View style={styles.formIcon}>
+                      <Text>📋</Text>
                     </View>
-                    <View style={styles.statCard}>
-                      <Text style={styles.statNum}>
-                        {responses.filter((r) => r.confirmed).length}
+                    <View style={styles.formBody}>
+                      <Text style={styles.formTitle} numberOfLines={1}>
+                        {f?.title || fid}
                       </Text>
-                      <Text style={styles.statLabel}>Confirmed</Text>
-                    </View>
-                    <View style={styles.statCard}>
-                      <Text style={[styles.statNum, { color: C.success }]}>
-                        {responses.length > 0
-                          ? Math.round((responses.length - (creatorView?.undecrypted || 0)) / responses.length * 100) + "%"
-                          : "—"}
+                      <Text style={styles.formMeta}>
+                        {(f?.questions?.length || 0) + "q"}
+                        {respCount > 0 && ` · ${respCount} resp`}
                       </Text>
-                      <Text style={styles.statLabel}>Decrypted</Text>
                     </View>
-                  </View>
-
-                  {/* Share card */}
-                  <View style={styles.shareCard}>
-                    <Text style={styles.shareCardLabel}>SHARE THIS FORM</Text>
-                    <View style={styles.shareUriBox}>
-                      <Text style={styles.shareUriText} numberOfLines={1}>{shareUri}</Text>
-                    </View>
-                  </View>
-
-                  {/* Responses */}
-                  <Text style={styles.sectionLabel}>
-                    RESPONSES ({responses.length})
-                  </Text>
-                  {responses.map((r, i) => (
-                    <View key={i} style={styles.respCard}>
-                      <View style={styles.respHeader}>
-                        <Text style={styles.respAddr}>
-                          {r.respondent.slice(0, 6)}…{r.respondent.slice(-4)}
-                        </Text>
-                        {r.confirmed ? (
-                          <View style={styles.confirmedBadge}>
-                            <Text style={styles.confirmedBadgeText}>✓ Confirmed</Text>
-                          </View>
-                        ) : (
-                          <View style={styles.decryptedBadge}>
-                            <Text style={styles.decryptedBadgeText}>Decrypted</Text>
-                          </View>
-                        )}
+                    {mine && (
+                      <View style={styles.mineBadge}>
+                        <Text style={styles.mineBadgeText}>Mine</Text>
                       </View>
-                      {r.answers.map((a, j) => (
-                        <View key={j} style={styles.respRow}>
-                          <Text style={styles.respQ} numberOfLines={1}>{a.question}</Text>
-                          <Text style={styles.respA}>{a.answer}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  ))}
-                </View>
-              )}
-
-              {/* ── Respondent View ── */}
-              {!isCreator && selectedForm.questions && (
-                <View>
-                  {selectedForm.questions.map((q) => (
-                    <View key={q.id} style={styles.questionBlock}>
-                      <Text style={styles.questionText}>
-                        {q.text}{q.required ? " *" : ""}
-                      </Text>
-                      <TextInput
-                        style={styles.input}
-                        placeholder="Your answer"
-                        placeholderTextColor={C.textTert}
-                        value={answers[q.id] || ""}
-                        onChangeText={(t) => setAnswers((a) => ({ ...a, [q.id]: t }))}
-                      />
-                    </View>
-                  ))}
-
-                  <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit}>
-                    <Text style={styles.submitBtnText}>Submit Response</Text>
+                    )}
                   </TouchableOpacity>
-
-                  <View style={styles.privacyNote}>
-                    <Text style={styles.privacyNoteText}>
-                      🔒 Your answers are sealed end-to-end. Only the form creator can read them.
-                    </Text>
-                  </View>
+                );
+              })}
+              {(!state?.feed || state.feed.length === 0) && (
+                <View style={styles.emptySidebar}>
+                  <Text style={styles.emptySidebarText}>No forms yet</Text>
+                  <Text style={styles.emptySidebarSub}>Tap + to create one</Text>
                 </View>
               )}
             </ScrollView>
-          )}
+
+            <View style={styles.sidebarFooter}>
+              <Text style={styles.sidebarFooterText}>
+                {identity ? identity.address.slice(0, 8) + "…" : "—"} · {nodeMode === "shared" ? "shared" : "edge"}
+              </Text>
+            </View>
+          </View>
         </View>
+      )}
+
+      {/* ── Main Content ── */}
+      <View style={styles.main}>
+        {!selectedForm ? (
+          <View style={styles.empty}>
+            <Text style={styles.emptyIcon}>📋</Text>
+            <Text style={styles.emptyTitle}>No form selected</Text>
+            <Text style={styles.emptySub}>
+              {state?.feed?.length
+                ? "Open the menu (☰) to pick a form"
+                : "Tap + to create your first form"}
+            </Text>
+          </View>
+        ) : (
+          <ScrollView contentContainerStyle={styles.detail}>
+            {/* Header */}
+            <View style={styles.detailHeader}>
+              <Text style={styles.detailTitle}>{selectedForm.title}</Text>
+              {isCreator && (
+                <TouchableOpacity style={styles.shareBtn} onPress={() => setShowShare(true)}>
+                  <Text style={styles.shareBtnText}>Share</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {selectedForm.description ? (
+              <Text style={styles.detailDesc}>{selectedForm.description}</Text>
+            ) : null}
+
+            <View style={styles.metaRow}>
+              {!(state?.closedForms?.has(selectedForm.id)) && (
+                <View style={styles.openBadge}>
+                  <Text style={styles.openBadgeText}>Open</Text>
+                </View>
+              )}
+              <Text style={styles.metaText}>
+                by {selectedForm.creator.slice(0, 6)}…{selectedForm.creator.slice(-4)}
+              </Text>
+            </View>
+
+            {/* ── Creator View ── */}
+            {isCreator && (
+              <View>
+                <View style={styles.statsRow}>
+                  <View style={styles.statCard}>
+                    <Text style={[styles.statNum, { color: C.primary }]}>{responses.length}</Text>
+                    <Text style={styles.statLabel}>Responses</Text>
+                  </View>
+                  <View style={styles.statCard}>
+                    <Text style={styles.statNum}>
+                      {responses.filter((r) => r.confirmed).length}
+                    </Text>
+                    <Text style={styles.statLabel}>Confirmed</Text>
+                  </View>
+                </View>
+
+                <View style={styles.shareCard}>
+                  <Text style={styles.shareCardLabel}>SHARE THIS FORM</Text>
+                  <View style={styles.shareUriBox}>
+                    <Text style={styles.shareUriText} numberOfLines={2}>{shareUri}</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.sectionLabel}>
+                  RESPONSES ({responses.length})
+                </Text>
+                {responses.map((r, i) => (
+                  <View key={i} style={styles.respCard}>
+                    <View style={styles.respHeader}>
+                      <Text style={styles.respAddr}>
+                        {r.respondent.slice(0, 6)}…{r.respondent.slice(-4)}
+                      </Text>
+                      {r.confirmed ? (
+                        <View style={styles.confirmedBadge}>
+                          <Text style={styles.confirmedBadgeText}>✓ Confirmed</Text>
+                        </View>
+                      ) : (
+                        <View style={styles.decryptedBadge}>
+                          <Text style={styles.decryptedBadgeText}>Decrypted</Text>
+                        </View>
+                      )}
+                    </View>
+                    {r.answers.map((a, j) => (
+                      <View key={j} style={styles.respRow}>
+                        <Text style={styles.respQ} numberOfLines={1}>{a.question}</Text>
+                        <Text style={styles.respA}>{a.answer}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ))}
+              </View>
+            )}
+
+            {/* ── Respondent View ── */}
+            {!isCreator && selectedForm.questions && (
+              <View>
+                {selectedForm.questions.map((q) => (
+                  <View key={q.id} style={styles.questionBlock}>
+                    <Text style={styles.questionText}>
+                      {q.text}{q.required ? " *" : ""}
+                    </Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="Your answer"
+                      placeholderTextColor={C.textTert}
+                      value={answers[q.id] || ""}
+                      onChangeText={(t) => setAnswers((a) => ({ ...a, [q.id]: t }))}
+                      multiline
+                    />
+                  </View>
+                ))}
+
+                <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit}>
+                  <Text style={styles.submitBtnText}>Submit Response</Text>
+                </TouchableOpacity>
+
+                <View style={styles.privacyNote}>
+                  <Text style={styles.privacyNoteText}>
+                    🔒 Your answers are sealed end-to-end. Only the form creator can read them.
+                  </Text>
+                </View>
+              </View>
+            )}
+          </ScrollView>
+        )}
       </View>
 
-      {/* ── Create Overlay ── */}
+      {/* ── Create Overlay (simplified: just a title) ── */}
       {showCreate && (
         <CreateOverlay
           onClose={() => setShowCreate(false)}
@@ -314,34 +394,22 @@ export default function App() {
   );
 }
 
-// ── Create Form Overlay ───────────────────────────────────────────────────────
+// ── Create Form Overlay (simplified: title only) ──────────────────────────────
 
 function CreateOverlay({ onClose, onCreate }: {
   onClose: () => void;
-  onCreate: (title: string, questions: Question[]) => void;
+  onCreate: (title: string) => void;
 }) {
   const [title, setTitle] = useState("");
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const [qText, setQText] = useState("");
-
-  const addQuestion = () => {
-    if (!qText.trim()) return;
-    setQuestions((qs) => [
-      ...qs,
-      { id: "question_" + (qs.length + 1), type: "text", text: qText.trim(), required: true },
-    ]);
-    setQText("");
-  };
 
   const doCreate = () => {
-    if (!title.trim()) { alert("Form needs a title"); return; }
-    if (questions.length === 0) { alert("Add at least one question"); return; }
-    onCreate(title.trim(), questions);
+    if (!title.trim()) { Alert.alert("Hint", "Give your form a title"); return; }
+    onCreate(title.trim());
   };
 
   return (
     <View style={styles.overlay}>
-      <View style={[styles.overlayCard, { maxHeight: "80%" }]}>
+      <View style={styles.overlayCard}>
         <View style={styles.overlayHeader}>
           <Text style={styles.overlayTitle}>New Form</Text>
           <TouchableOpacity onPress={onClose}>
@@ -349,39 +417,19 @@ function CreateOverlay({ onClose, onCreate }: {
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.sectionLabel}>TITLE</Text>
         <TextInput
           style={styles.input}
           placeholder="Form title"
           placeholderTextColor={C.textTert}
           value={title}
           onChangeText={setTitle}
+          autoFocus
+          onSubmitEditing={doCreate}
         />
 
-        <Text style={styles.sectionLabel}>QUESTIONS ({questions.length})</Text>
-        {questions.map((q, i) => (
-          <View key={i} style={styles.draftQ}>
-            <Text style={styles.draftQNum}>Q{i + 1}</Text>
-            <Text style={styles.draftQText} numberOfLines={1}>{q.text}</Text>
-            <TouchableOpacity onPress={() => setQuestions((qs) => qs.filter((_, j) => j !== i))}>
-              <Text style={styles.draftQRemove}>✕</Text>
-            </TouchableOpacity>
-          </View>
-        ))}
-
-        <View style={styles.addQRow}>
-          <TextInput
-            style={[styles.input, { flex: 1 }]}
-            placeholder="Question text"
-            placeholderTextColor={C.textTert}
-            value={qText}
-            onChangeText={setQText}
-            onSubmitEditing={addQuestion}
-          />
-          <TouchableOpacity style={styles.addQBtn} onPress={addQuestion}>
-            <Text style={styles.addQBtnText}>+</Text>
-          </TouchableOpacity>
-        </View>
+        <Text style={styles.createHint}>
+          Respondents will see a single text field to fill in.
+        </Text>
 
         <View style={styles.overlayFooter}>
           <TouchableOpacity onPress={onClose}>
@@ -400,44 +448,108 @@ function CreateOverlay({ onClose, onCreate }: {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: C.bg },
-  row: { flex: 1, flexDirection: "row" },
 
-  // Sidebar
+  // Node selection
+  nodeSelect: {
+    flex: 1, justifyContent: "center", padding: 32,
+    alignItems: "center",
+  },
+  nodeSelectIcon: { fontSize: 48, marginBottom: 12 },
+  nodeSelectTitle: { fontSize: 28, fontWeight: "700", color: C.text, marginBottom: 4 },
+  nodeSelectSub: { fontSize: 14, color: C.textTert, marginBottom: 40 },
+  nodeOption: {
+    flexDirection: "row", alignItems: "center",
+    backgroundColor: C.surface, borderRadius: R.lg,
+    padding: 20, width: "100%", marginBottom: 12,
+    borderWidth: 1, borderColor: C.border,
+  },
+  nodeOptionIcon: {
+    width: 44, height: 44, borderRadius: R.md,
+    backgroundColor: C.primarySubtle,
+    alignItems: "center", justifyContent: "center", marginRight: 14,
+    fontSize: 20,
+  },
+  nodeOptionBody: { flex: 1 },
+  nodeOptionTitle: { fontSize: 16, fontWeight: "600", color: C.text, marginBottom: 2 },
+  nodeOptionDesc: { fontSize: 12, color: C.textTert, lineHeight: 16 },
+
+  // Top bar
+  topBar: {
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: 1, borderBottomColor: C.borderSubtle,
+    backgroundColor: C.bg,
+  },
+  hamburger: {
+    width: 36, height: 36, borderRadius: R.sm,
+    backgroundColor: C.surfaceRaised,
+    alignItems: "center", justifyContent: "center",
+    marginRight: 12,
+  },
+  hamburgerIcon: { fontSize: 16, color: C.text },
+  topBarTitle: { flex: 1, flexDirection: "row", alignItems: "center", gap: 8 },
+  topBarAppName: { fontSize: 16, fontWeight: "700", color: C.text },
+  statusPill: {
+    flexDirection: "row", alignItems: "center",
+    backgroundColor: C.surfaceRaised, borderRadius: 10,
+    paddingHorizontal: 8, paddingVertical: 3,
+  },
+  dot: { width: 6, height: 6, borderRadius: 3, marginRight: 5 },
+  statusPillText: { fontSize: 10, color: C.textTert },
+  newBtnSmall: {
+    width: 36, height: 36, borderRadius: R.sm,
+    backgroundColor: C.primary,
+    alignItems: "center", justifyContent: "center",
+    marginLeft: 12,
+  },
+  newBtnSmallText: { fontSize: 20, color: "#fff", fontWeight: "600" },
+
+  // Sidebar overlay
+  sidebarOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 50,
+  },
+  sidebarBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
   sidebar: {
-    width: "42%", backgroundColor: C.bg,
-    borderRightWidth: 1, borderRightColor: C.borderSubtle,
-    paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12,
+    width: "75%", maxWidth: 320,
+    backgroundColor: C.surface,
+    borderTopRightRadius: R.lg,
+    borderBottomRightRadius: R.lg,
+    paddingTop: 16, paddingBottom: 12,
+    paddingHorizontal: 16,
   },
-  brand: { flexDirection: "row", alignItems: "center", marginBottom: 16 },
-  brandIcon: { fontSize: 20, marginRight: 8 },
-  brandName: { fontSize: 16, fontWeight: "700", color: C.text },
-  brandSub: { fontSize: 11, color: C.textTert },
-
-  newBtn: {
-    backgroundColor: C.primary, borderRadius: R.md,
-    paddingVertical: 10, alignItems: "center", marginBottom: 16,
+  sidebarHeader: {
+    flexDirection: "row", justifyContent: "space-between",
+    alignItems: "center", marginBottom: 12,
   },
-  newBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
-
-  sectionLabel: {
-    fontSize: 10, fontWeight: "600", color: C.textTert,
-    marginBottom: 8, marginTop: 4,
+  sidebarTitle: { fontSize: 18, fontWeight: "700", color: C.text },
+  sidebarClose: { fontSize: 14, color: C.textTert, padding: 4 },
+  sidebarFooter: {
+    paddingTop: 8, borderTopWidth: 1, borderTopColor: C.borderSubtle,
   },
+  sidebarFooterText: { fontSize: 11, color: C.textTert },
+  emptySidebar: { alignItems: "center", paddingVertical: 40 },
+  emptySidebarText: { fontSize: 14, color: C.textSec, marginBottom: 4 },
+  emptySidebarSub: { fontSize: 12, color: C.textTert },
 
+  // Form list
   formList: { flex: 1 },
   formItem: {
     flexDirection: "row", alignItems: "center",
-    padding: 10, borderRadius: R.md, marginBottom: 4,
+    padding: 12, borderRadius: R.md, marginBottom: 4,
     borderWidth: 1, borderColor: "transparent",
   },
   formItemActive: { backgroundColor: C.primarySubtle, borderColor: C.primary },
   formIcon: {
     width: 32, height: 32, borderRadius: R.sm,
     backgroundColor: C.primarySubtle,
-    alignItems: "center", justifyContent: "center", marginRight: 8,
+    alignItems: "center", justifyContent: "center", marginRight: 10,
   },
   formBody: { flex: 1 },
-  formTitle: { fontSize: 13, fontWeight: "600", color: C.text },
+  formTitle: { fontSize: 14, fontWeight: "600", color: C.text },
   formMeta: { fontSize: 11, color: C.textTert },
   mineBadge: {
     backgroundColor: C.primarySubtle, borderRadius: 10,
@@ -445,18 +557,12 @@ const styles = StyleSheet.create({
   },
   mineBadgeText: { fontSize: 10, fontWeight: "600", color: C.primary },
 
-  footer: {
-    flexDirection: "row", alignItems: "center",
-    paddingTop: 8, borderTopWidth: 1, borderTopColor: C.borderSubtle,
-  },
-  dot: { width: 7, height: 7, borderRadius: 4, marginRight: 6 },
-  footerText: { fontSize: 11, color: C.textTert },
-
-  // Main pane
-  main: { flex: 1, backgroundColor: C.surface },
-  empty: { flex: 1, alignItems: "center", justifyContent: "center" },
+  // Main content
+  main: { flex: 1, backgroundColor: C.bg },
+  empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 32 },
+  emptyIcon: { fontSize: 40, marginBottom: 12, opacity: 0.5 },
   emptyTitle: { fontSize: 18, fontWeight: "600", color: C.textSec, marginBottom: 4 },
-  emptySub: { fontSize: 13, color: C.textTert },
+  emptySub: { fontSize: 13, color: C.textTert, textAlign: "center" },
 
   detail: { padding: 20 },
   detailHeader: { flexDirection: "row", alignItems: "flex-start", marginBottom: 8 },
@@ -522,8 +628,9 @@ const styles = StyleSheet.create({
   input: {
     backgroundColor: C.surfaceRaised, borderRadius: R.md,
     paddingHorizontal: 14, paddingVertical: 12,
-    color: C.text, fontSize: 13,
+    color: C.text, fontSize: 14,
     borderWidth: 1, borderColor: C.border,
+    minHeight: 44,
   },
   submitBtn: {
     backgroundColor: C.accent, borderRadius: R.md,
@@ -540,7 +647,7 @@ const styles = StyleSheet.create({
   // Overlays
   overlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(11,11,16,0.8)",
+    backgroundColor: "rgba(11,11,16,0.85)",
     justifyContent: "center", alignItems: "center",
     padding: 24, zIndex: 100,
   },
@@ -554,22 +661,16 @@ const styles = StyleSheet.create({
   overlayClose: { fontSize: 14, color: C.textTert },
   overlayFooter: { flexDirection: "row", justifyContent: "flex-end", gap: 12, marginTop: 16 },
   cancelText: { fontSize: 14, color: C.textTert, alignSelf: "center" },
+  createHint: { fontSize: 12, color: C.textTert, marginTop: 8, marginBottom: 4 },
 
-  // Draft questions
-  draftQ: {
-    flexDirection: "row", alignItems: "center",
-    backgroundColor: C.surfaceRaised, borderRadius: R.sm,
-    paddingHorizontal: 10, paddingVertical: 8, marginBottom: 4,
-    borderWidth: 1, borderColor: C.border,
+  // Buttons
+  newBtn: {
+    backgroundColor: C.primary, borderRadius: R.md,
+    paddingVertical: 10, paddingHorizontal: 20, alignItems: "center",
   },
-  draftQNum: { fontSize: 12, fontWeight: "600", color: C.primary, marginRight: 8 },
-  draftQText: { flex: 1, fontSize: 13, color: C.text },
-  draftQRemove: { fontSize: 12, color: C.textTert, padding: 4 },
-  addQRow: { flexDirection: "row", gap: 8, marginTop: 8 },
-  addQBtn: {
-    width: 44, backgroundColor: C.surfaceRaised, borderRadius: R.md,
-    alignItems: "center", justifyContent: "center",
-    borderWidth: 1, borderColor: C.border,
+  newBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+  sectionLabel: {
+    fontSize: 10, fontWeight: "600", color: C.textTert,
+    marginBottom: 8, marginTop: 4,
   },
-  addQBtnText: { fontSize: 18, color: C.textTert },
 });
