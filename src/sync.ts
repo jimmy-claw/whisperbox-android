@@ -8,7 +8,7 @@
 //   - Periodic: reconcile to detect gaps
 
 import { WbEvent, mergeEvents, totalOrder } from "./engine";
-import { publishEvent, sendSyncReq, onSyncReq } from "./transport";
+import { publishEvent, sendSyncReq, onSyncReq } from "./mock-transport";
 
 // ── Event store (in-memory + AsyncStorage persistence) ────────────────────────
 

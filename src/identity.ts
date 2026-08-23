@@ -4,6 +4,7 @@
 
 import * as SecureStore from "expo-secure-store";
 import { deriveIdentity, Identity } from "./crypto";
+import { toHex, fromHex } from "./encoding";
 
 const KEY_NAME = "whisperbox-identity";
 
@@ -15,7 +16,7 @@ export async function getIdentity(): Promise<Identity> {
     const stored = await SecureStore.getItemAsync(KEY_NAME);
     if (stored) {
       const hex = stored;
-      const privKey = new Uint8Array(Buffer.from(hex, "hex"));
+      const privKey = fromHex(hex);
       cached = deriveIdentity(privKey);
       return cached;
     }
@@ -23,7 +24,7 @@ export async function getIdentity(): Promise<Identity> {
 
   // Generate new identity
   const id = deriveIdentity();
-  const hex = Buffer.from(id.privKey).toString("hex");
+  const hex = toHex(id.privKey);
   await SecureStore.setItemAsync(KEY_NAME, hex);
   cached = id;
   return id;

@@ -1,3 +1,4 @@
+import { base64ToBytes } from "./encoding";
 // whisperbox-android — pure, deterministic fold from a merged event log to app state.
 // BYTE-PARITY with whisperbox-logos/whisperbox_core/src/whisperbox_engine.hpp.
 //
@@ -193,7 +194,7 @@ export function computeCreatorView(
   for (const sr of state.sealedPool) {
     // Try to decrypt
     try {
-      const sealedBytes = new Uint8Array(Buffer.from(sr.sealed, "base64"));
+      const sealedBytes = base64ToBytes(sr.sealed);
       const plaintext = openFn(sealedBytes);
       if (!plaintext) {
         undecrypted++;

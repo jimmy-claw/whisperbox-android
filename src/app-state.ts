@@ -1,16 +1,18 @@
 // whisperbox-android — app state manager.
 // Wires together: identity + transport + sync + engine.
-// Exposes a simple observable state for the React Native UI.
+// Uses mock transport by default (Expo Go compatible).
+// Swap to real loam-transport for production native builds.
 
 import { getIdentity } from "./identity";
-import { startNode, stopNode, publishEvent, storeSync, onEvent, onStatus, getPeerCount } from "./transport";
-import { initSync, appendEvent, getLog, startReconcile, stopReconcile } from "./sync";
+import * as transport from "./mock-transport";
+import { appendEvent, getLog, initSync, startReconcile, stopReconcile } from "./sync";
 import {
   WbEvent, HlcClock, computeState, computeCreatorView,
-  AppState, CreatorView, FormDef, Question, TOPIC,
+  AppState, CreatorView, FormDef, Question,
 } from "./engine";
-import { seal, open, Identity, pubKeyFromAddress } from "./crypto";
-import * as AsyncStorage from "@react-native-async-storage/async-storage";
+import { seal, open, Identity, pubKeyFromHex } from "./crypto";
+import { bytesToBase64, base64ToBytes } from "./encoding";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const STORAGE_KEY = "whisperbox-log";
 
@@ -72,7 +74,7 @@ export async function init(): Promise<void> {
   notify();
 
   identity = await getIdentity();
-  const deviceId = identity.address.slice(2, 10); // short device id
+  const deviceId = identity.address.slice(2, 10);
   clock = new HlcClock(deviceId);
 
   status = "loading log";
@@ -83,7 +85,6 @@ export async function init(): Promise<void> {
     const stored = await AsyncStorage.getItem(STORAGE_KEY);
     if (stored) {
       const events: WbEvent[] = JSON.parse(stored);
-      // Set log without triggering refold yet
       const { setLog } = require("./sync");
       setLog(events);
     }
@@ -93,23 +94,22 @@ export async function init(): Promise<void> {
   notify();
 
   // Register event handler BEFORE starting node
-  onEvent(onWbEvent);
-  onStatus((s: string) => { status = s; notify(); });
+  transport.onEvent(onWbEvent);
+  transport.onStatus((s: string) => { status = s; notify(); });
 
   initSync();
-  await startNode(identity, deviceId);
+  await transport.startNode(identity, deviceId);
 
   // Cold-start: pull history from fleet store
-  status = "syncing history";
+  status = "syncing";
   notify();
   try {
-    await storeSync();
+    await transport.storeSync();
   } catch { /* offline */ }
 
   // Send SYNC_REQ to trigger peers to serve us
   try {
-    const { sendSyncReq } = require("./transport");
-    await sendSyncReq();
+    await transport.sendSyncReq();
   } catch { /* offline */ }
 
   // Start periodic reconcile
@@ -122,7 +122,7 @@ export async function init(): Promise<void> {
 
 export async function shutdown(): Promise<void> {
   stopReconcile();
-  await stopNode();
+  await transport.stopNode();
   status = "stopped";
   notify();
 }
@@ -138,7 +138,7 @@ export async function createForm(title: string, description: string, questions: 
     title,
     description,
     creator: identity.address,
-    publicKey: Buffer.from(identity.pubKey).toString("hex"),
+    publicKey: identity.pubHex,
     createdAt: Date.now(),
     expiresAt: null,
     questions,
@@ -155,7 +155,7 @@ export async function createForm(title: string, description: string, questions: 
   appendEvent(event);
   refold();
   persistLog();
-  await publishEvent(event);
+  await transport.publishEvent(event);
   return formId;
 }
 
@@ -166,14 +166,14 @@ export async function submitResponse(formId: string, answers: { question: string
   if (!form) throw new Error("form not found");
 
   // ECIES-seal the response to the form creator's public key
-  const creatorPub = pubKeyFromAddress(form.publicKey);
+  const creatorPub = pubKeyFromHex(form.publicKey);
   const plaintext = JSON.stringify({
     formId,
     respondent: identity.address,
     answers,
   });
   const sealed = seal(new TextEncoder().encode(plaintext), creatorPub);
-  const sealedB64 = Buffer.from(sealed).toString("base64");
+  const sealedB64 = bytesToBase64(sealed);
 
   const respId = `resp-${formId}-${identity.address.slice(2, 8)}-${Date.now()}`;
   const event: WbEvent = {
@@ -190,7 +190,7 @@ export async function submitResponse(formId: string, answers: { question: string
   appendEvent(event);
   refold();
   persistLog();
-  await publishEvent(event);
+  await transport.publishEvent(event);
 }
 
 export async function closeForm(formId: string): Promise<void> {
@@ -206,7 +206,7 @@ export async function closeForm(formId: string): Promise<void> {
   appendEvent(event);
   refold();
   persistLog();
-  await publishEvent(event);
+  await transport.publishEvent(event);
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────

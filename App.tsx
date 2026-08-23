@@ -6,8 +6,8 @@ import {
 import {
   init, shutdown, getState, subscribe,
   createForm, submitResponse, closeForm,
-} from "../src/app-state";
-import { AppState, CreatorView, FormDef, Question } from "../src/engine";
+} from "./src/app-state";
+import { AppState, CreatorView, FormDef, Question } from "./src/engine";
 
 // ── Design tokens ─────────────────────────────────────────────────────────────
 const C = {
@@ -168,7 +168,7 @@ export default function App() {
               ) : null}
 
               <View style={styles.metaRow}>
-                {selectedForm.status !== "closed" && (
+                {!(state?.closedForms?.has(selectedForm.id)) && (
                   <View style={styles.openBadge}>
                     <Text style={styles.openBadgeText}>Open</Text>
                   </View>
