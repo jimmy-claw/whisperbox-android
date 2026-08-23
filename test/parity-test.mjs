@@ -7,13 +7,22 @@
 //   3. Open (decrypt what C++ sealed)
 //   4. Round-trip (seal → open → same plaintext)
 
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deriveIdentity, seal, open, toHex, fromHex } from "../src/crypto.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixturesDir = join(here, "../../whisperbox-logos/packages/contract/test/fixtures");
+
+// The golden vectors live in the sibling whisperbox-logos repo. If it isn't checked
+// out next to us (e.g. CI, or a standalone clone), skip parity rather than crash —
+// the self-contained fold test still runs via `npm test`.
+if (!existsSync(join(fixturesDir, "crypto-identities.json"))) {
+  console.log(`\n⚠ parity-test: fixtures not found at ${fixturesDir}`);
+  console.log("  (sibling whisperbox-logos repo not checked out — skipping ECIES byte-parity)\n");
+  process.exit(0);
+}
 
 let passed = 0;
 let failed = 0;
