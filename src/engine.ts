@@ -126,6 +126,14 @@ export function computeState(log: WbEvent[], myAddress: string): AppState {
         }
         break;
       }
+      case "form.update": {
+        // Local-first edit: overwrite the form def, preserve its feed position.
+        const p = e.payload;
+        if (p && p.id && forms[p.id]) {
+          forms[p.id] = { ...forms[p.id], ...p, id: p.id, creator: forms[p.id].creator, publicKey: forms[p.id].publicKey };
+        }
+        break;
+      }
       case "response.submit": {
         const p = e.payload;
         if (p && p.id && p.sealed) {

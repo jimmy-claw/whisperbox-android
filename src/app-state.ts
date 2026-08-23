@@ -324,6 +324,28 @@ export async function createForm(title: string, description: string, questions: 
   return formId;
 }
 
+// Local-first edit: overwrite a form you created. Applied to local state immediately,
+// published in the background (works fully offline).
+export async function updateForm(formId: string, updates: Partial<FormDef>): Promise<void> {
+  if (!identity || !clock || !state) throw new Error("not initialized");
+  const existing = state.forms[formId];
+  if (!existing) throw new Error("form not found");
+  if (existing.creator.toLowerCase() !== identity.address.toLowerCase()) throw new Error("not your form");
+
+  const updated: FormDef = { ...existing, ...updates, id: formId, creator: existing.creator, publicKey: existing.publicKey };
+  const event: WbEvent = {
+    id: `update-${formId}-${Date.now()}`,
+    hlc: clock.now(),
+    type: "form.update",
+    payload: updated,
+  };
+
+  appendEvent(event);
+  refold();
+  persistLog();
+  publishEvent(event).catch(() => { /* retry later */ });
+}
+
 export async function submitResponse(formId: string, answers: { question: string; answer: string }[]): Promise<void> {
   if (!identity || !clock || !state) throw new Error("not initialized");
 
