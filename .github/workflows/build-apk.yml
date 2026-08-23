@@ -85,7 +85,7 @@ jobs:
           cp "$APK_PATH" whisperbox-android.apk
           gh release create "$TAG" \
             --title "WhisperBox Android (standalone)" \
-            --body "Standalone APK — JS bundled, no dev server needed.\n\nInstall: tap APK → allow unknown apps → open." \
+            --notes "Standalone APK — JS bundled, no dev server needed." \
             --prerelease \
             whisperbox-android.apk
           echo "Download: $(gh release view "$TAG" --json url --jq .url)/whisperbox-android.apk"
