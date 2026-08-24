@@ -45,16 +45,20 @@ jobs:
       - name: Prebuild native project
         run: npx expo prebuild --platform android --no-install
 
-      - name: Build debug APK (standalone, JS bundled)
+      - name: Build release APK (minified, stable signature)
         working-directory: android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file=../whisperbox.keystore \
+            -Pandroid.injected.signing.store.password=whisperbox123 \
+            -Pandroid.injected.signing.key.alias=whisperbox \
+            -Pandroid.injected.signing.key.password=whisperbox123
 
       - name: Find APK
         id: find_apk
         run: |
-          APK=$(find android/app/build/outputs/apk/debug/ -name "*.apk" | head -1)
+          APK=$(find android/app/build/outputs/apk/release/ -name "*.apk" | head -1)
           if [ -z "$APK" ]; then
             echo "No APK found!"
             find android/app/build/outputs/ -name "*.apk" 2>/dev/null
