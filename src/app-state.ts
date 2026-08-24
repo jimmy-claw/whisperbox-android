@@ -5,6 +5,7 @@
 import { getIdentity } from "./identity";
 import * as loam from "loam-transport";
 import { envEvent, envSyncReq, openCandidate } from "./envelope";
+import { serveLog } from "./sync-serve";
 import { appendEvent, getLog, initSync, startReconcile, stopReconcile, setSendSyncReq } from "./sync";
 import {
   WbEvent, HlcClock, computeState, computeCreatorView,
@@ -96,16 +97,13 @@ function onWbEvent(e: WbEvent): void {
 
 // ── Sync handlers ─────────────────────────────────────────────────────────────
 
+// Serve our full log to a peer that sent SYNC_REQ. Uses serveLog() so a flaky
+// network (publishSealed throws when the node isn't settled) can't abort the
+// serve or leak an unhandled rejection — see src/sync-serve.ts.
 async function handleSyncReq(_from: string): Promise<void> {
   const log = getLog();
   if (log.length === 0) return;
-  const BATCH = 20;
-  for (let i = 0; i < log.length; i += BATCH) {
-    const batch = log.slice(i, i + BATCH);
-    for (const e of batch) {
-      await publishEvent(e);
-    }
-  }
+  await serveLog(log, publishEvent);
 }
 
 async function sendSyncReq(): Promise<void> {

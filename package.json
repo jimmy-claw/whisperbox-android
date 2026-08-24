@@ -7,7 +7,7 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "test": "npx tsx test/parity-test.mjs && npx tsx test/fold-test.mjs && npx tsx test/envelope-test.mjs"
+    "test": "npx tsx test/parity-test.mjs && npx tsx test/fold-test.mjs && npx tsx test/envelope-test.mjs && npx tsx test/sync-serve-test.mjs"
   },
   "dependencies": {
     "@noble/ciphers": "^1.0.0",
