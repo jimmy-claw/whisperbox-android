@@ -49,8 +49,10 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
+          STORE_FILE="$(cd .. && pwd)/whisperbox.keystore"
+          echo "Signing with: $STORE_FILE"
           ./gradlew assembleRelease --no-daemon \
-            -Pandroid.injected.signing.store.file=../whisperbox.keystore \
+            -Pandroid.injected.signing.store.file="$STORE_FILE" \
             -Pandroid.injected.signing.store.password=whisperbox123 \
             -Pandroid.injected.signing.key.alias=whisperbox \
             -Pandroid.injected.signing.key.password=whisperbox123
