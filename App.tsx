@@ -551,15 +551,30 @@ function Diagnostics({ onClose }: { onClose: () => void }) {
   };
 
   // Directly load the embedded node's native lib and surface the exact error.
+  // Result is shown in a MODAL (unmissable, no scrolling) AND at the top of the panel.
   const doProbe = async () => {
     setProbe("probing…");
-    if (!NativeModules.LogosMessaging) { setProbe("✗ LogosMessaging module MISSING — not registered in this build"); return; }
-    try {
-      await NativeModules.LogosMessaging.setup();
-      setProbe("✓ LogosMessaging.setup() OK — native .so loaded");
-    } catch (e: any) {
-      setProbe("✗ LogosMessaging.setup() FAILED: " + (e?.message || String(e)));
+    let result: string;
+    if (!NativeModules.LogosMessaging) {
+      result = "✗ LogosMessaging module MISSING — not registered in this build";
+    } else {
+      try {
+        await NativeModules.LogosMessaging.setup();
+        result = "✓ LogosMessaging.setup() OK — native .so loaded";
+      } catch (e: any) {
+        result = "✗ LogosMessaging.setup() FAILED: " + (e?.message || String(e));
+      }
     }
+    setProbe(result);
+    // Full summary in a modal so it can't be missed / scrolled past.
+    const { nodeMode, nodeStatus, status } = getState();
+    Alert.alert("Native lib probe", [
+      result,
+      "",
+      "nodeMode: " + nodeMode,
+      "nodeStatus: " + nodeStatus,
+      "status: " + status,
+    ].join("\n"));
   };
 
   useEffect(() => { refresh(); }, []);
@@ -573,14 +588,16 @@ function Diagnostics({ onClose }: { onClose: () => void }) {
           <TouchableOpacity onPress={onClose}><Text style={styles.overlayClose}>✕</Text></TouchableOpacity>
         </View>
         <ScrollView>
+          {/* Probe result at the TOP so it's visible without scrolling */}
+          <Text style={styles.sectionLabel}>NATIVE LIB PROBE (embedded node)</Text>
+          <Text style={styles.diagVal}>{probe || "(tap ‘Probe native lib’ to test loading the .so)"}</Text>
+          <Text style={styles.sectionLabel}>STATE</Text>
           {rows.map(([k, v]) => (
             <View key={k} style={styles.diagRow}>
               <Text style={styles.diagKey}>{k}</Text>
               <Text style={styles.diagVal} numberOfLines={3}>{v}</Text>
             </View>
           ))}
-          <Text style={styles.sectionLabel}>NATIVE LIB PROBE (embedded node)</Text>
-          <Text style={styles.diagVal}>{probe || "(tap ‘Probe native lib’ to test loading the .so)"}</Text>
         </ScrollView>
         <View style={styles.overlayFooter}>
           <TouchableOpacity style={styles.editBtn} onPress={doProbe}>
