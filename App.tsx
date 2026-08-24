@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, TouchableOpacity,
-  TextInput, StatusBar, SafeAreaView, Alert,
+  TextInput, StatusBar, SafeAreaView, Alert, NativeModules,
 } from "react-native";
 import * as loam from "loam-transport";
 import {
@@ -73,6 +73,7 @@ export default function App() {
   const [selectedId, setSelectedId] = useState("");
   const [showSidebar, setShowSidebar] = useState(false);
   const [showShare, setShowShare] = useState(false);
+  const [showDiag, setShowDiag] = useState(false);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   // null = still checking saved mode; true = ready; false = show node selection
   const [nodeModeChosen, setNodeModeChosen] = useState<boolean | null>(null);
@@ -200,11 +201,17 @@ export default function App() {
           <Text style={styles.topBarAppName}>WhisperBox</Text>
           <View style={styles.statusPill}>
             <View style={[styles.dot, { backgroundColor: nodeStatus === "connected" ? C.success : nodeStatus === "connecting" ? C.warning : C.error }]} />
-            <Text style={styles.statusPillText}>
-              {nodeStatus === "connected" ? "online" : nodeStatus === "connecting" ? "connecting…" : "offline"}
+            <Text style={styles.statusPillText} numberOfLines={1}>
+              {nodeStatus === "connected" ? "online"
+                : nodeStatus === "connecting" ? "connecting…"
+                : nodeStatus.startsWith("error") ? nodeStatus.slice(0, 26)
+                : "offline"}
             </Text>
           </View>
         </View>
+        <TouchableOpacity style={styles.diagBtn} onPress={() => setShowDiag(true)}>
+          <Text style={styles.diagBtnText}>🔍</Text>
+        </TouchableOpacity>
         <TouchableOpacity style={styles.newBtnSmall} onPress={() => setEditor({ form: null })}>
           <Text style={styles.newBtnSmallText}>+</Text>
         </TouchableOpacity>
@@ -419,6 +426,9 @@ export default function App() {
           </View>
         </View>
       )}
+
+      {/* ── Diagnostics Overlay ── */}
+      {showDiag && <Diagnostics onClose={() => setShowDiag(false)} />}
     </SafeAreaView>
   );
 }
@@ -503,6 +513,81 @@ function FormEditor({ initial, onClose, onSave }: {
           <TouchableOpacity onPress={onClose}><Text style={styles.cancelText}>Cancel</Text></TouchableOpacity>
           <TouchableOpacity style={styles.newBtn} onPress={doSave}>
             <Text style={styles.newBtnText}>{initial ? "Save" : "Create"}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+// ── Diagnostics (runtime probe — reveals why the node won't connect) ──────────
+// The #1 suspects: (a) native module not registered in this build, (b) the .so
+// fails to load at runtime. This screen surfaces both directly.
+function Diagnostics({ onClose }: { onClose: () => void }) {
+  const [diag, setDiag] = useState<Record<string, string>>({});
+  const [probe, setProbe] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+
+  const refresh = async () => {
+    setBusy(true);
+    const d: Record<string, string> = {};
+    d["NativeModules.LogosMessaging (embedded)"] = NativeModules.LogosMessaging ? "PRESENT" : "MISSING";
+    d["NativeModules.LogosDeliveryClient (shared)"] = NativeModules.LogosDeliveryClient ? "PRESENT" : "MISSING";
+    const safe = (k: string, fn: () => any) => { try { d[k] = String(fn()); } catch (e: any) { d[k] = "threw: " + (e?.message || e); } };
+    safe("deliveryAvailable()", () => loam.deliveryAvailable());
+    safe("usingServiceBackend()", () => loam.usingServiceBackend());
+    safe("serviceNodeDown()", () => loam.serviceNodeDown());
+    safe("serviceAwaitingApproval()", () => loam.serviceAwaitingApproval());
+    safe("getStoreInfo()", () => loam.getStoreInfo() || "(empty)");
+    safe("getCtx()", () => loam.getCtx() || "(empty)");
+    safe("counters", () => JSON.stringify(loam.counters));
+    try { d["serviceDiag()"] = await loam.serviceDiag(); } catch (e: any) { d["serviceDiag()"] = "threw: " + (e?.message || e); }
+    const { nodeMode, nodeStatus, status } = getState();
+    d["nodeMode"] = nodeMode;
+    d["nodeStatus"] = nodeStatus;
+    d["status"] = status;
+    setDiag(d);
+    setBusy(false);
+  };
+
+  // Directly load the embedded node's native lib and surface the exact error.
+  const doProbe = async () => {
+    setProbe("probing…");
+    if (!NativeModules.LogosMessaging) { setProbe("✗ LogosMessaging module MISSING — not registered in this build"); return; }
+    try {
+      await NativeModules.LogosMessaging.setup();
+      setProbe("✓ LogosMessaging.setup() OK — native .so loaded");
+    } catch (e: any) {
+      setProbe("✗ LogosMessaging.setup() FAILED: " + (e?.message || String(e)));
+    }
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  const rows = Object.entries(diag);
+  return (
+    <View style={styles.overlay}>
+      <View style={[styles.overlayCard, { maxHeight: "85%" }]}>
+        <View style={styles.overlayHeader}>
+          <Text style={styles.overlayTitle}>Diagnostics</Text>
+          <TouchableOpacity onPress={onClose}><Text style={styles.overlayClose}>✕</Text></TouchableOpacity>
+        </View>
+        <ScrollView>
+          {rows.map(([k, v]) => (
+            <View key={k} style={styles.diagRow}>
+              <Text style={styles.diagKey}>{k}</Text>
+              <Text style={styles.diagVal} numberOfLines={3}>{v}</Text>
+            </View>
+          ))}
+          <Text style={styles.sectionLabel}>NATIVE LIB PROBE (embedded node)</Text>
+          <Text style={styles.diagVal}>{probe || "(tap ‘Probe native lib’ to test loading the .so)"}</Text>
+        </ScrollView>
+        <View style={styles.overlayFooter}>
+          <TouchableOpacity style={styles.editBtn} onPress={doProbe}>
+            <Text style={styles.editBtnText}>Probe native lib</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.newBtn} onPress={refresh}>
+            <Text style={styles.newBtnText}>{busy ? "…" : "Refresh"}</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -743,4 +828,16 @@ const styles = StyleSheet.create({
     paddingVertical: 10, paddingHorizontal: 20, alignItems: "center",
   },
   newBtnText: { color: "#fff", fontSize: 13, fontWeight: "600" },
+
+  // Diagnostics
+  diagBtn: {
+    width: 36, height: 36, borderRadius: R.sm,
+    backgroundColor: C.surfaceRaised,
+    alignItems: "center", justifyContent: "center", marginLeft: 8, marginRight: 8,
+    borderWidth: 1, borderColor: C.border,
+  },
+  diagBtnText: { fontSize: 15 },
+  diagRow: { marginBottom: 10 },
+  diagKey: { fontSize: 11, fontWeight: "600", color: C.textSec, marginBottom: 2 },
+  diagVal: { fontSize: 12, fontFamily: "monospace", color: C.text, backgroundColor: C.bg, borderRadius: R.sm, padding: 8, borderWidth: 1, borderColor: C.borderSubtle },
 });
