@@ -4,7 +4,7 @@
 
 import { getIdentity } from "./identity";
 import * as loam from "loam-transport";
-import { toByteArray } from "base64-js";
+import { envEvent, envSyncReq, openCandidate } from "./envelope";
 import { appendEvent, getLog, initSync, startReconcile, stopReconcile, setSendSyncReq } from "./sync";
 import {
   WbEvent, HlcClock, computeState, computeCreatorView,
@@ -94,45 +94,6 @@ function onWbEvent(e: WbEvent): void {
   persistLog();
 }
 
-// ── Envelope helpers ──────────────────────────────────────────────────────────
-
-function envEvent(event: WbEvent): string {
-  return JSON.stringify({ v: 1, type: "EVENT", event });
-}
-
-function envSyncReq(from: string): string {
-  return JSON.stringify({ v: 1, type: "SYNC_REQ", from });
-}
-
-function parseEnvelope(text: string): { type: string; event?: WbEvent; from?: string } | null {
-  try {
-    const o = JSON.parse(text);
-    if (!o || typeof o.type !== "string") return null;
-    if (o.type === "EVENT" && o.event && typeof o.event === "object") {
-      return { type: "EVENT", event: o.event };
-    }
-    if (o.type === "SYNC_REQ") {
-      return { type: "SYNC_REQ", from: typeof o.from === "string" ? o.from : "" };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function peelBase64(raw: string): string {
-  let s = raw.trim();
-  for (let i = 0; i < 2; i++) {
-    if (s.startsWith("{") || s.startsWith("[")) break;
-    try {
-      s = new TextDecoder().decode(toByteArray(s));
-    } catch {
-      break;
-    }
-  }
-  return s;
-}
-
 // ── Sync handlers ─────────────────────────────────────────────────────────────
 
 async function handleSyncReq(_from: string): Promise<void> {
@@ -164,18 +125,16 @@ function wireTransport(): void {
     topics: [TOPIC],
     onReceive: (topic: string, candidates: Uint8Array[]): boolean => {
       for (const cand of candidates) {
-        try {
-          const text = peelBase64(new TextDecoder().decode(cand));
-          const env = parseEnvelope(text);
-          if (env && env.type === "EVENT" && env.event) {
-            onWbEvent(env.event);
-            return true;
-          }
-          if (env && env.type === "SYNC_REQ") {
-            handleSyncReq(env.from || "");
-            return true;
-          }
-        } catch { /* try next */ }
+        const env = openCandidate(cand);
+        if (!env) continue;
+        if (env.type === "EVENT" && env.event) {
+          onWbEvent(env.event);
+          return true;
+        }
+        if (env.type === "SYNC_REQ") {
+          handleSyncReq(env.from || "");
+          return true;
+        }
       }
       return false;
     },
@@ -197,14 +156,11 @@ function wireTransport(): void {
     // Cold-start: pull history
     loam.storeSync((topic: string, candidates: Uint8Array[]): boolean => {
       for (const cand of candidates) {
-        try {
-          const text = peelBase64(new TextDecoder().decode(cand));
-          const env = parseEnvelope(text);
-          if (env && env.type === "EVENT" && env.event) {
-            onWbEvent(env.event);
-            return true;
-          }
-        } catch { /* */ }
+        const env = openCandidate(cand);
+        if (env && env.type === "EVENT" && env.event) {
+          onWbEvent(env.event);
+          return true;
+        }
       }
       return false;
     }).catch(() => { /* offline */ });

@@ -36,8 +36,10 @@ jobs:
       - name: Install dependencies
         run: npm install
 
-      - name: Engine fold tests (local-first editing, HLC, creator view)
-        run: npx tsx test/fold-test.mjs
+      - name: Engine fold + envelope tests (local-first editing, HLC, wire decode)
+        run: |
+          npx tsx test/fold-test.mjs
+          npx tsx test/envelope-test.mjs
 
       - name: Prebuild native project
         run: npx expo prebuild --platform android --no-install
