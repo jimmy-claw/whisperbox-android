@@ -5,8 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "expo start",
-    "android": "expo start --android",
-    "ios": "expo start --ios",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
     "test": "npx tsx test/parity-test.mjs && npx tsx test/fold-test.mjs && npx tsx test/envelope-test.mjs && npx tsx test/sync-serve-test.mjs"
   },
   "dependencies": {

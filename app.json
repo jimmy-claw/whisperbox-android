@@ -12,6 +12,10 @@
     "android": {
       "package": "co.whisperbox.app"
     },
+    "plugins": [
+      "./plugins/withLogosDelivery",
+      "./plugins/withDeliveryClient"
+    ],
     "ios": {
       "bundleIdentifier": "co.whisperbox.app"
     }
