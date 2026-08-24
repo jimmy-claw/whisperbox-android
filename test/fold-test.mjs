@@ -150,10 +150,13 @@ console.log("\n── HlcClock ──");
   // two now() in the same ms must still be strictly ordered (ctr increments)
   assert(compareHlc(t1, t2) < 0, "now() is strictly monotonic within same ms");
 
-  // receive a FUTURE remote hlc → next now() must be after it
-  clock.receive(hlc(Date.now() + 5000, 0, "remote"));
+  // receive a FUTURE remote hlc → next now() must be at/after it.
+  // Capture the future wall ONCE and compare against that constant — comparing
+  // against a fresh Date.now() is flaky (the clock advances between the two reads).
+  const futureWall = Date.now() + 5000;
+  clock.receive(hlc(futureWall, 0, "remote"));
   const t3 = clock.now();
-  assert(t3.wall >= Date.now() + 5000, "receive(future) advances the clock");
+  assert(t3.wall >= futureWall, "receive(future) advances the clock");
   assert(t3.dev === "dev1", "local device id preserved after receive");
 }
 
